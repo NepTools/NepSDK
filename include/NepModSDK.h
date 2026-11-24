@@ -144,4 +144,61 @@ namespace NepSDK
 		if (hThread)
 			CloseHandle(hThread);
 	}
+
+	namespace detail
+	{
+		struct WaitForPointerArgs
+		{
+			void **address;
+			void (*onReady)(void *value);
+			DWORD pollIntervalMs;
+			DWORD timeoutMs;
+		};
+
+		inline DWORD WINAPI WaitForPointerThread(LPVOID param)
+		{
+			auto *args = (WaitForPointerArgs *)param;
+
+			DWORD waited = 0;
+			void *value = nullptr;
+			while (waited < args->timeoutMs)
+			{
+				value = *args->address;
+				if (value)
+					break;
+				Sleep(args->pollIntervalMs);
+				waited += args->pollIntervalMs;
+			}
+
+			if (value)
+				args->onReady(value);
+			else
+				Log("NepSDK: gave up waiting for a non-null pointer at %p after %lu ms", (void *)args->address, args->timeoutMs);
+
+			delete args;
+			return 0;
+		}
+	}
+
+	inline void WaitForPointerAsync(void **address, void (*onReady)(void *value), DWORD pollIntervalMs = 100, DWORD timeoutMs = 30000)
+	{
+		auto *args = new detail::WaitForPointerArgs{ address, onReady, pollIntervalMs, timeoutMs };
+		HANDLE hThread = CreateThread(nullptr, 0, detail::WaitForPointerThread, args, 0, nullptr);
+		if (hThread)
+			CloseHandle(hThread);
+	}
+
+	inline void *HookVTableMethod(void *comObject, int methodIndex, void *newMethod)
+	{
+		auto *vtable = *(uintptr_t **)comObject;
+		uintptr_t *slot = &vtable[methodIndex];
+		void *original = (void *)*slot;
+
+		DWORD oldProtect;
+		VirtualProtect(slot, sizeof(uintptr_t), PAGE_READWRITE, &oldProtect);
+		*slot = (uintptr_t)newMethod;
+		VirtualProtect(slot, sizeof(uintptr_t), oldProtect, &oldProtect);
+
+		return original;
+	}
 }
